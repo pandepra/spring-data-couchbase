@@ -68,14 +68,20 @@ public class CouchbaseRepositoryQueryIntegrationTests extends ClusterAwareIntegr
 
 	@Test
 	void shouldSaveAndFindAll() {
-		Airport vie = new Airport("airports::vie", "vie", "loww");
-		airportRepository.save(vie);
+		Airport vie = null;
+		try {
+			vie = new Airport("airports::vie", "vie", "loww");
 
-		List<Airport> all = StreamSupport.stream(airportRepository.findAll().spliterator(), false)
-				.collect(Collectors.toList());
+			airportRepository.save(vie);
 
-		assertFalse(all.isEmpty());
-		assertTrue(all.stream().anyMatch(a -> a.getId().equals("airports::vie")));
+			List<Airport> all = StreamSupport.stream(airportRepository.findAll().spliterator(), false)
+					.collect(Collectors.toList());
+
+			assertFalse(all.isEmpty());
+			assertTrue(all.stream().anyMatch(a -> a.getId().equals("airports::vie")));
+		} finally {
+			airportRepository.delete(vie);
+		}
 	}
 
 	@Test
@@ -128,29 +134,37 @@ public class CouchbaseRepositoryQueryIntegrationTests extends ClusterAwareIntegr
 		ExecutorService executorService = Executors.newFixedThreadPool(iatas.length);
 
 		try {
-			Callable<Boolean>[] suppliers = new Callable[iatas.length];
 			for (int i = 0; i < iatas.length; i++) {
 				Airport airport = new Airport("airports::" + iatas[i], iatas[i] /*iata*/, iatas[i].toLowerCase() /* lcao */);
 				airportRepository.save(airport);
-				final int idx = i;
-				suppliers[i] = () -> {
-					System.out.println(Thread.currentThread() + " " + iatas[idx] + " ->");
-					try {
-						Thread.sleep(iatas.length - idx); // so they are executed out-of-order
-					} catch (InterruptedException ie) {
-						;
-					}
-					String foundName = airportRepository.findAllByIata(iatas[idx]).get(0).getIata();
-					System.out.println(Thread.currentThread() + " " + iatas[idx] + " <- ");
-					assertEquals(iatas[idx], foundName);
-					return iatas[idx].equals(foundName);
-				};
 			}
-			for (int i = 0; i < iatas.length; i++) {
-				future[i] = executorService.submit(suppliers[i]);
+			try {
+				Thread.sleep(1000);
+			} catch (InterruptedException ie) {
+				;
 			}
-			for (int i = 0; i < iatas.length; i++) {
-				future[i].get();
+			for (int k = 0; k < 50; k++) {
+				Callable<Boolean>[] suppliers = new Callable[iatas.length];
+				for (int i = 0; i < iatas.length; i++) {
+					final int idx = i;
+					suppliers[i] = () -> {
+						try {
+							Thread.sleep(iatas.length - idx); // so they are executed out-of-order
+						} catch (InterruptedException ie) {
+							;
+						}
+						List<Airport> airports = airportRepository.findAllByIata(iatas[idx]);
+						String foundName = airportRepository.findAllByIata(iatas[idx]).get(0).getIata();
+						assertEquals(iatas[idx], foundName);
+						return iatas[idx].equals(foundName);
+					};
+				}
+				for (int i = 0; i < iatas.length; i++) {
+					future[i] = executorService.submit(suppliers[i]);
+				}
+				for (int i = 0; i < iatas.length; i++) {
+					future[i].get(); // check is done in Callable
+				}
 			}
 
 		} finally {
@@ -163,35 +177,42 @@ public class CouchbaseRepositoryQueryIntegrationTests extends ClusterAwareIntegr
 	}
 
 	@Test
-	void threadSafeStringParametersTest()  throws Exception {
+	void threadSafeStringParametersTest() throws Exception {
 		String[] iatas = { "JFK", "IAD", "SFO", "SJC", "SEA", "LAX", "PHX" };
 		Future[] future = new Future[iatas.length];
 		ExecutorService executorService = Executors.newFixedThreadPool(iatas.length);
 
 		try {
-			Callable<Boolean>[] suppliers = new Callable[iatas.length];
 			for (int i = 0; i < iatas.length; i++) {
-				Airport airport = new Airport("airports::" + iatas[i], iatas[i] /*iata*/, iatas[i] /* lcao */);
+				Airport airport = new Airport("airports::" + iatas[i], iatas[i] /*iata*/, iatas[i].toLowerCase() /* lcao */);
 				airportRepository.save(airport);
-				final int idx = i;
-				suppliers[i] = () -> {
-					System.out.println(Thread.currentThread() + " " + iatas[idx] + " ->");
-					try {
-						Thread.sleep(iatas.length - idx); // so they are executed out-of-order
-					} catch (InterruptedException ie) {
-						;
-					}
-					String foundName = airportRepository.getAllByIata(iatas[idx]).get(0).getIata();
-					System.out.println(Thread.currentThread() + " " + iatas[idx] + " <- ");
-					assertEquals(iatas[idx], foundName);
-					return iatas[idx].equals(foundName);
-				};
 			}
-			for (int i = 0; i < iatas.length; i++) {
-				future[i] = executorService.submit(suppliers[i]);
+			try {
+				Thread.sleep(1000); // so they are executed out-of-order
+			} catch (InterruptedException ie) {
+				;
 			}
-			for (int i = 0; i < iatas.length; i++) {
-				future[i].get();
+			for (int k = 0; k < 100; k++) {
+				Callable<Boolean>[] suppliers = new Callable[iatas.length];
+				for (int i = 0; i < iatas.length; i++) {
+					final int idx = i;
+					suppliers[i] = () -> {
+						try {
+							Thread.sleep(iatas.length - idx); // so they are executed out-of-order
+						} catch (InterruptedException ie) {
+							;
+						}
+						String foundName = airportRepository.getAllByIata(iatas[idx]).get(0).getIata();
+						assertEquals(iatas[idx], foundName);
+						return iatas[idx].equals(foundName);
+					};
+				}
+				for (int i = 0; i < iatas.length; i++) {
+					future[i] = executorService.submit(suppliers[i]);
+				}
+				for (int i = 0; i < iatas.length; i++) {
+					future[i].get(); // check is done in Callable
+				}
 			}
 		} finally {
 			executorService.shutdown();
